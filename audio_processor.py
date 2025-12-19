@@ -40,22 +40,23 @@ class AudioDiarySummarizer:
         
         # Initialize LangChain LLM for summarization
         self.llm = ChatOpenAI(
-            model="gpt-4",
-            temperature=0.7,
+            model="gpt-5-mini",
+            temperature=1,
             api_key=os.getenv("OPENAI_API_KEY")
         )
         
         # Create summarization chain using LangChain
         summary_prompt = PromptTemplate(
-            input_variables=["date", "transcript"],
-            template="""Please provide a concise summary (2-3 paragraphs) of the following diary entry from {date}:
+            input_variables=["transcript"],
+            template="""Please provide a concise summary (2-3 paragraphs) of the following diary entry. 
+Write the summary in second person, describing what the person did and how they felt, using "you" perspective.
 
 {transcript}
 
 Summary:"""
         )
         
-        self.summary_chain = LLMChain(llm=self.llm, prompt=summary_prompt)
+        self.summary_chain = summary_prompt | self.llm
 
         # Create output folder if it doesn't exist
         self.output_folder.mkdir(exist_ok=True)
@@ -106,7 +107,9 @@ Summary:"""
 
             with open(audio_file, "rb") as f:
                 transcript = self.transcription_client.audio.transcriptions.create(
-                    model="whisper-1", file=f
+                    model="gpt-4o-mini-transcribe", 
+                    file=f,
+                    prompt="This is a personal diary entry."
                 )
 
             print(f"✓ Transcription complete for {audio_file.name}")
@@ -118,6 +121,27 @@ Summary:"""
         except Exception as e:
             print(f"Error transcribing {audio_file.name}: {str(e)}")
             return None
+
+    def load_transcripts_from_json(self) -> dict:
+        """
+        Load existing transcripts from the saved JSON file.
+
+        Returns:
+            Dictionary with existing transcripts, or empty dict if no file found
+        """
+        json_file = self.output_folder / "all_summaries.json"
+        if not json_file.exists():
+            print(f"No saved transcripts found at {json_file}")
+            return {}
+        
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"✓ Loaded {len(data)} transcript(s) from {json_file}")
+            return data
+        except Exception as e:
+            print(f"Error loading transcripts: {str(e)}")
+            return {}
 
     def summarize_text(self, text: str, date: str) -> Optional[str]:
         """
@@ -139,7 +163,7 @@ Summary:"""
                 "transcript": text
             })
 
-            summary = result.get("text", "")
+            summary = result.content
             print(f"✓ Summarization complete for {date}")
             return summary
 
@@ -182,6 +206,96 @@ Summary:"""
                 "processed_at": datetime.now().isoformat(),
             }
 
+        return results
+
+    def summarize_only(self, specific_date: Optional[str] = None) -> dict:
+        """
+        Summarize only using existing transcripts from JSON file.
+        This skips the transcription step entirely.
+
+        Args:
+            specific_date: If provided, only summarize this date (YYYY-MM-DD format)
+
+        Returns:
+            Dictionary with updated results including new summaries
+        """
+        results = self.load_transcripts_from_json()
+
+        if not results:
+            print("No transcripts found to summarize.")
+            return {}
+
+        # Filter to specific date if provided
+        if specific_date:
+            if specific_date not in results:
+                print(f"Error: No transcript found for date {specific_date}")
+                return {}
+            results = {specific_date: results[specific_date]}
+
+        print("\nStarting summarization-only mode...")
+        updated_results = {}
+
+        for date, data in results.items():
+            if "transcript" not in data:
+                print(f"⚠ Skipping {date}: No transcript found")
+                continue
+
+            # Summarize using existing transcript
+            summary = self.summarize_text(data["transcript"], date)
+            if not summary:
+                continue
+
+            updated_results[date] = {
+                "filename": data.get("filename", f"{date}.m4a"),
+                "transcript": data["transcript"],
+                "summary": summary,
+                "processed_at": datetime.now().isoformat(),
+            }
+
+        return updated_results
+
+    def process_single_file(self, file_date: str) -> dict:
+        """
+        Process a single audio file by date.
+
+        Args:
+            file_date: Date in YYYY-MM-DD format
+
+        Returns:
+            Dictionary with result for the processed file
+        """
+        audio_files = self.get_audio_files()
+        
+        # Find the file matching the date
+        target_file = None
+        for audio_file in audio_files:
+            if audio_file.stem == file_date:
+                target_file = audio_file
+                break
+        
+        if not target_file:
+            print(f"Error: No audio file found for date {file_date}")
+            return {}
+        
+        results = {}
+        
+        # Transcribe
+        transcript = self.transcribe_audio(target_file)
+        if not transcript:
+            return {}
+        
+        # Summarize
+        summary = self.summarize_text(transcript, file_date)
+        if not summary:
+            return {}
+        
+        results[file_date] = {
+            "filename": target_file.name,
+            "transcript": transcript,
+            "summary": summary,
+            "processed_at": datetime.now().isoformat(),
+        }
+        
         return results
 
     def save_results(self, results: dict) -> None:
@@ -228,7 +342,74 @@ Summary:"""
         else:
             print("\nNo files were successfully processed.")
 
+    def run_summarize_only(self, specific_date: Optional[str] = None) -> None:
+        """
+        Run summarization only using existing transcripts.
+        
+        Args:
+            specific_date: If provided, only summarize this date (YYYY-MM-DD format)
+        """
+        print("=" * 60)
+        print("Audio Diary Summarization Only (No Transcription)")
+        print("=" * 60)
+
+        results = self.summarize_only(specific_date)
+
+        if results:
+            self.save_results(results)
+            print("\n" + "=" * 60)
+            print(f"Summarization complete! Summarized {len(results)} file(s).")
+            print("=" * 60)
+        else:
+            print("\nNo files were successfully summarized.")
+
+    def run_single_file(self, file_date: str) -> None:
+        """
+        Run full pipeline (transcribe + summarize) for a single file.
+        
+        Args:
+            file_date: Date in YYYY-MM-DD format
+        """
+        print("=" * 60)
+        print(f"Processing Single File: {file_date}")
+        print("=" * 60)
+
+        results = self.process_single_file(file_date)
+
+        if results:
+            self.save_results(results)
+            print("\n" + "=" * 60)
+            print(f"Processing complete! Processed 1 file.")
+            print("=" * 60)
+        else:
+            print("\nFile processing failed.")
+
 
 if __name__ == "__main__":
+    import sys
+    
     summarizer = AudioDiarySummarizer()
-    summarizer.run()
+    
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--summarize-only":
+            # Optional: specify date after --summarize-only
+            date = sys.argv[2] if len(sys.argv) > 2 else None
+            summarizer.run_summarize_only(date)
+        elif sys.argv[1] == "--file":
+            # Requires date argument: python audio_processor.py --file 2025-12-19
+            if len(sys.argv) < 3:
+                print("Error: --file requires a date argument (YYYY-MM-DD format)")
+                print("Usage: python audio_processor.py --file 2025-12-19")
+                sys.exit(1)
+            summarizer.run_single_file(sys.argv[2])
+        else:
+            print(f"Unknown argument: {sys.argv[1]}")
+            print("\nUsage:")
+            print("  python audio_processor.py                           # Process all files")
+            print("  python audio_processor.py --file 2025-12-19         # Process single file")
+            print("  python audio_processor.py --summarize-only          # Summarize all existing transcripts")
+            print("  python audio_processor.py --summarize-only 2025-12-19 # Summarize one existing transcript")
+            sys.exit(1)
+    else:
+        summarizer.run()
