@@ -46,7 +46,8 @@ The application creates an `output/` folder containing:
 
 Each markdown file contains:
 - Full transcript
-- AI-generated summary (2-3 paragraphs)
+- AI-generated summary (4-5 paragraphs)
+- 2 Insights & Suggestions
 
 ## Features
 

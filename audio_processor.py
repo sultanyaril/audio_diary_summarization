@@ -48,14 +48,17 @@ class AudioDiarySummarizer:
         # Create summarization chain using LangChain
         summary_prompt = PromptTemplate(
             input_variables=["transcript"],
-            template="""Please provide a concise summary (2-3 paragraphs) of the following diary entry. 
-Write the summary in second person, describing what the person did and how they felt, using "you" perspective.
+            template="""Please provide a detailed summary (4–5 paragraphs) of the following diary entry.
+Write the summary in first person, using “I,” describing what I did, what I experienced, and how I felt.
+
+Use the same language as the majority of the provided transcript (do not translate unless explicitly asked).
+
+At the end of the summary, add a clearly separated section (using markdown title) titled “Insights & Suggestions” that includes two practical, thoughtful insights or suggestions derived from the diary entry. These should be actionable and relevant to my emotional state, habits, or decisions described in the text.
 
 {transcript}
 
 Summary:"""
         )
-        
         self.summary_chain = summary_prompt | self.llm
 
         # Create output folder if it doesn't exist
