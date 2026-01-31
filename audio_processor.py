@@ -61,8 +61,10 @@ Summary:"""
         )
         self.summary_chain = summary_prompt | self.llm
 
-        # Create output folder if it doesn't exist
+        # Create output folders if they don't exist
         self.output_folder.mkdir(exist_ok=True)
+        self.meta_folder = self.output_folder / "meta"
+        self.meta_folder.mkdir(exist_ok=True)
 
         if not self.data_folder.exists():
             raise FileNotFoundError(f"Data folder not found: {self.data_folder}")
@@ -127,20 +129,30 @@ Summary:"""
 
     def load_transcripts_from_json(self) -> dict:
         """
-        Load existing transcripts from the saved JSON file.
+        Load existing transcripts from the meta folder.
 
         Returns:
-            Dictionary with existing transcripts, or empty dict if no file found
+            Dictionary with existing transcripts, or empty dict if no files found
         """
-        json_file = self.output_folder / "all_summaries.json"
-        if not json_file.exists():
-            print(f"No saved transcripts found at {json_file}")
+        if not self.meta_folder.exists():
+            print(f"No meta folder found at {self.meta_folder}")
             return {}
         
         try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            print(f"✓ Loaded {len(data)} transcript(s) from {json_file}")
+            meta_files = sorted(self.meta_folder.glob("*_meta.json"))
+            if not meta_files:
+                print(f"No transcript files found in {self.meta_folder}")
+                return {}
+            
+            data = {}
+            for meta_file in meta_files:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta_data = json.load(f)
+                    # Extract date from filename (e.g., "2025-12-19_meta.json" -> "2025-12-19")
+                    date = meta_file.stem.replace("_meta", "")
+                    data[date] = meta_data
+            
+            print(f"✓ Loaded {len(data)} transcript(s) from {self.meta_folder}")
             return data
         except Exception as e:
             print(f"Error loading transcripts: {str(e)}")
@@ -303,7 +315,7 @@ Summary:"""
 
     def save_results(self, results: dict) -> None:
         """
-        Save results to JSON and individual markdown files.
+        Save results to metadata JSON files and individual markdown files.
 
         Args:
             results: Dictionary of processing results
@@ -312,14 +324,21 @@ Summary:"""
             print("No results to save.")
             return
 
-        # Save combined JSON
-        json_output = self.output_folder / "all_summaries.json"
-        with open(json_output, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n✓ Results saved to {json_output}")
-
-        # Save individual markdown files
+        # Save individual meta JSON and markdown files
         for date, data in results.items():
+            # Save metadata JSON
+            meta_file = self.meta_folder / f"{date}_meta.json"
+            meta_data = {
+                "filename": data["filename"],
+                "transcript": data["transcript"],
+                "summary": data["summary"],
+                "processed_at": data["processed_at"]
+            }
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(meta_data, f, indent=2, ensure_ascii=False)
+            print(f"✓ Meta JSON saved: {meta_file}")
+            
+            # Save markdown file
             md_file = self.output_folder / f"{date}_summary.md"
             with open(md_file, "w", encoding="utf-8") as f:
                 f.write(f"# Diary Entry - {date}\n\n")
