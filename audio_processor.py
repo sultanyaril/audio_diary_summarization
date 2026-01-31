@@ -42,7 +42,8 @@ class AudioDiarySummarizer:
         self.llm = ChatOpenAI(
             model="gpt-5-mini",
             temperature=1,
-            api_key=os.getenv("OPENAI_API_KEY")
+            api_key=os.getenv("OPENAI_API_KEY"),
+            response_format={"type": "json_object"},
         )
         
         # Create summarization chain using LangChain
@@ -53,11 +54,13 @@ Write the summary in first person, using “I,” describing what I did, what I 
 
 Use the same language as the majority of the provided transcript (do not translate unless explicitly asked).
 
-At the end of the summary, add a clearly separated section (using markdown title) titled “Insights & Suggestions” that includes two practical, thoughtful insights or suggestions derived from the diary entry. These should be actionable and relevant to my emotional state, habits, or decisions described in the text.
+Return the response as a JSON object with the following structure:
+{{
+  "Summary": "The detailed summary here (4-5 paragraphs)",
+  "Insights & Suggestions": "Two practical, thoughtful insights or suggestions derived from the diary entry. These should be actionable and relevant to my emotional state, habits, or decisions described in the text."
+}}
 
-{transcript}
-
-Summary:"""
+{transcript}"""
         )
         self.summary_chain = summary_prompt | self.llm
 
@@ -158,7 +161,7 @@ Summary:"""
             print(f"Error loading transcripts: {str(e)}")
             return {}
 
-    def summarize_text(self, text: str, date: str) -> Optional[str]:
+    def summarize_text(self, text: str, date: str) -> Optional[dict]:
         """
         Summarize transcribed text using LangChain and OpenAI GPT.
 
@@ -167,7 +170,7 @@ Summary:"""
             date: Date from filename for context
 
         Returns:
-            Summary or None if summarization fails
+            Dictionary with 'summary' and 'Insights & Suggestions' keys, or None if summarization fails
         """
         try:
             print(f"Summarizing content from {date}...")
@@ -178,10 +181,14 @@ Summary:"""
                 "transcript": text
             })
 
-            summary = result.content
+            # Parse JSON response
+            summary_data = json.loads(result.content)
             print(f"✓ Summarization complete for {date}")
-            return summary
+            return summary_data
 
+        except json.JSONDecodeError:
+            print(f"Error: Invalid JSON response from summarization for {date}")
+            return None
         except Exception as e:
             print(f"Error summarizing content from {date}: {str(e)}")
             return None
@@ -345,7 +352,9 @@ Summary:"""
                 f.write("## Transcript\n\n")
                 f.write(f"{data['transcript']}\n\n")
                 f.write("## Summary\n\n")
-                f.write(f"{data['summary']}\n")
+                f.write(f"{data['summary']['summary']}\n\n")
+                f.write("## Insights & Suggestions\n\n")
+                f.write(f"{data['summary']['Insights & Suggestions']}\n")
             print(f"✓ Markdown file saved: {md_file}")
 
     def run(self) -> None:
@@ -430,7 +439,7 @@ if __name__ == "__main__":
             print("\nUsage:")
             print("  python audio_processor.py                           # Process all files")
             print("  python audio_processor.py --file 2025-12-19         # Process single file")
-            print("  python audio_processor.py --summarize-only          # Summarize all existing transcripts")
+            print("  python audio_processor.py --summarize-only          # Summarize all existing transcripts")  # summarize-only is mostly used to test prompts without need to transcribe again
             print("  python audio_processor.py --summarize-only 2025-12-19 # Summarize one existing transcript")
             sys.exit(1)
     else:
