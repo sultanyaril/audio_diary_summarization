@@ -352,7 +352,7 @@ Return the response as a JSON object with the following structure:
                 f.write("## Transcript\n\n")
                 f.write(f"{data['transcript']}\n\n")
                 f.write("## Summary\n\n")
-                f.write(f"{data['summary']['summary']}\n\n")
+                f.write(f"{data['summary']['Summary']}\n\n")
                 f.write("## Insights & Suggestions\n\n")
                 f.write(f"{data['summary']['Insights & Suggestions']}\n")
             print(f"✓ Markdown file saved: {md_file}")
