@@ -8,6 +8,7 @@ Uses LangChain for orchestration and OpenAI APIs for transcription and summariza
 
 import os
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -16,6 +17,8 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
+from pydub import AudioSegment, silence
+
 
 # Load environment variables
 load_dotenv()
@@ -100,9 +103,109 @@ Return the response as a JSON object with the following structure:
 
         return valid_files
 
+    def split_audio_on_silence(self, audio_file: Path, chunks_folder: Optional[Path] = None) -> list[Path]:
+        """
+        Split audio file into chunks based on silence detection.
+
+        Args:
+            audio_file: Path to audio file
+            chunks_folder: Path to folder where chunks will be saved (default: temporary folder)
+
+        Returns:
+            List of Path objects for audio chunks
+        """
+        try:
+            print(f"Loading and splitting audio file: {audio_file.name}...")
+            
+            # Create chunks folder if not provided
+            if chunks_folder is None:
+                chunks_folder = self.output_folder / "chunks"
+            chunks_folder.mkdir(exist_ok=True, parents=True)
+            
+            # Load audio file
+            audio = AudioSegment.from_file(str(audio_file))
+            
+            # Split on silence
+            chunks = silence.split_on_silence(
+                audio,
+                min_silence_len=1000,   # 1 second
+                silence_thresh=-40,     # dBFS
+                keep_silence=500
+            )
+            
+            print(f"  Found {len(chunks)} silence-separated segments")
+            
+            # Combine chunks to respect MAX_CHUNK_MS (7 minutes)
+            current_chunk = AudioSegment.empty()
+            chunk_index = 0
+            MAX_CHUNK_MS = 7 * 60 * 1000  # 7 minutes in milliseconds
+            chunk_paths = []
+            
+            for part in chunks:
+                if len(current_chunk) + len(part) > MAX_CHUNK_MS:
+                    # Save current chunk and start new one
+                    chunk_path = chunks_folder / f"chunk_{chunk_index:03d}.wav"
+                    current_chunk.export(str(chunk_path), format="wav")
+                    chunk_paths.append(chunk_path)
+                    print(f"  ✓ Saved chunk {chunk_index} ({len(current_chunk)}ms)")
+                    chunk_index += 1
+                    current_chunk = AudioSegment.empty()
+                
+                current_chunk += part
+            
+            # Save final chunk if it has content
+            if len(current_chunk) > 0:
+                chunk_path = chunks_folder / f"chunk_{chunk_index:03d}.wav"
+                current_chunk.export(str(chunk_path), format="wav")
+                chunk_paths.append(chunk_path)
+                print(f"  ✓ Saved chunk {chunk_index} ({len(current_chunk)}ms)")
+            
+            print(f"✓ Audio split into {len(chunk_paths)} chunk(s)")
+            return chunk_paths
+        
+        except Exception as e:
+            print(f"Error splitting audio {audio_file.name}: {str(e)}")
+            return []
+
+    def transcribe_audio_chunks(self, chunk_paths: list[Path]) -> Optional[str]:
+        """
+        Transcribe multiple audio chunks and concatenate results.
+
+        Args:
+            chunk_paths: List of paths to audio chunk files
+
+        Returns:
+            Concatenated transcribed text or None if transcription fails
+        """
+        try:
+            if not chunk_paths:
+                print("No audio chunks to transcribe")
+                return None
+            
+            full_transcript = []
+            
+            for i, chunk_path in enumerate(chunk_paths):
+                print(f"  Transcribing chunk {i + 1}/{len(chunk_paths)}...")
+                
+                with open(chunk_path, "rb") as f:
+                    transcript = self.transcription_client.audio.transcriptions.create(
+                        model="gpt-4o-mini-transcribe",
+                        file=f,
+                        prompt="This is a personal diary entry."
+                    )
+                    full_transcript.append(transcript.text)
+            
+            final_text = " ".join(full_transcript)
+            print(f"✓ Transcribed {len(chunk_paths)} chunk(s)")
+            return final_text
+        
+        except Exception as e:
+            print(f"Error transcribing audio chunks: {str(e)}")
+            return None
+
     def transcribe_audio(self, audio_file: Path) -> Optional[str]:
         """
-        Transcribe audio file using OpenAI Whisper API.
+        Transcribe audio file using OpenAI API with noise-based splitting.
 
         Args:
             audio_file: Path to audio file
@@ -112,16 +215,25 @@ Return the response as a JSON object with the following structure:
         """
         try:
             print(f"Transcribing {audio_file.name}...")
-
-            with open(audio_file, "rb") as f:
-                transcript = self.transcription_client.audio.transcriptions.create(
-                    model="gpt-4o-mini-transcribe", 
-                    file=f,
-                    prompt="This is a personal diary entry."
-                )
-
+            
+            # Split audio on silence
+            chunk_paths = self.split_audio_on_silence(audio_file)
+            
+            if not chunk_paths:
+                print(f"Error: Could not split audio file {audio_file.name}")
+                return None
+            
+            # Transcribe chunks
+            transcript = self.transcribe_audio_chunks(chunk_paths)
+            
+            # Clean up chunks folder
+            chunks_folder = self.output_folder / "chunks"
+            if chunks_folder.exists():
+                import shutil
+                shutil.rmtree(chunks_folder)
+            
             print(f"✓ Transcription complete for {audio_file.name}")
-            return transcript.text
+            return transcript
 
         except FileNotFoundError:
             print(f"Error: Audio file not found: {audio_file}")
